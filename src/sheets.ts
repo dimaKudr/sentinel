@@ -36,7 +36,11 @@ export async function getSheetValues(
   return data.values;
 }
 
-/** Strips currency symbols/commas/whitespace before parsing (e.g. "$1,234.56" -> 1234.56). */
+/**
+ * Strips currency symbols/commas/whitespace before parsing (e.g. "$1,234.56" -> 1234.56).
+ * Note: does not handle accounting-style negatives like "(123.45)" -- the brief only
+ * specifies "$123.45"/"1,234.56" style values, so that's left unhandled for now.
+ */
 export function parseNumber(value: unknown): number {
   if (typeof value !== "string") {
     return typeof value === "number" ? value : Number(value);
