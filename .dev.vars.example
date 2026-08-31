@@ -1,0 +1,21 @@
+# Copy this file to `.dev.vars` for local `wrangler dev` testing.
+# `.dev.vars` is gitignored -- never commit real secret values.
+#
+# In production these three secrets are set with `wrangler secret put <NAME>`
+# (see README.md), not via this file.
+
+# Full JSON contents of the downloaded Google service-account key file,
+# as a single line (no real value below -- placeholder only):
+GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"your-project","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"your-sa@your-project.iam.gserviceaccount.com","client_id":"...","token_uri":"https://oauth2.googleapis.com/token"}
+
+# Token for the Telegram bot created via @BotFather:
+TELEGRAM_BOT_TOKEN=123456789:AAplaceholder-not-a-real-token
+
+# Chat ID of the Telegram channel the bot posts to (often negative for channels):
+TELEGRAM_CHAT_ID=-1001234567890
+
+# Shared secret required to hit the manual /run route (sent by the caller as
+# the `X-Run-Secret` header). Prevents anyone who finds the deployed Worker
+# URL from triggering a real Telegram send and burning API quota. Generate a
+# random value, e.g. `openssl rand -hex 32` (placeholder only -- not real):
+RUN_SECRET=local-dev-run-secret-placeholder

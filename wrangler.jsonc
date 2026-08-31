@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sentinel",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+
+  // Keep the public <name>.<subdomain>.workers.dev URL enabled, and enable
+  // Preview URLs (per-version workers.dev URLs) that follow from it. Set
+  // explicitly so the deployed config always matches this file instead of
+  // drifting from Cloudflare's dashboard defaults.
+  "workers_dev": true,
+  "preview_urls": true,
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true
+    }
+  },
+
+  // Fires every hour, every day. The Worker itself decides (in Europe/Prague
+  // local time) whether it's actually within the Mon-Fri run window before
+  // doing any work -- this keeps the schedule correct across DST
+  // changeovers without ever needing to edit this file twice a year.
+  "triggers": {
+    "crons": ["0 * * * *"]
+  }
+
+  // Runtime secrets (never put real values here -- set via `wrangler secret put`):
+  //   GOOGLE_SERVICE_ACCOUNT_JSON
+  //   TELEGRAM_BOT_TOKEN
+  //   TELEGRAM_CHAT_ID
+  //   RUN_SECRET -- required to authenticate requests to the manual /run route
+}
