@@ -48,6 +48,7 @@ describe("sendTelegram", () => {
     GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
     TELEGRAM_BOT_TOKEN: "test-token",
     TELEGRAM_CHAT_ID: "test-chat-id",
+    RUN_SECRET: "test-run-secret",
   };
 
   afterEach(() => {

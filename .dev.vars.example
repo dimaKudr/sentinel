@@ -13,3 +13,9 @@ TELEGRAM_BOT_TOKEN=123456789:AAplaceholder-not-a-real-token
 
 # Chat ID of the Telegram channel the bot posts to (often negative for channels):
 TELEGRAM_CHAT_ID=-1001234567890
+
+# Shared secret required to hit the manual /run route (sent by the caller as
+# the `X-Run-Secret` header). Prevents anyone who finds the deployed Worker
+# URL from triggering a real Telegram send and burning API quota. Generate a
+# random value, e.g. `openssl rand -hex 32` (placeholder only -- not real):
+RUN_SECRET=local-dev-run-secret-placeholder

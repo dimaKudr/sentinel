@@ -7,4 +7,6 @@ export interface Env {
   GOOGLE_SERVICE_ACCOUNT_JSON: string;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
+  /** Shared secret required (via the `X-Run-Secret` header) to hit the manual `/run` route. */
+  RUN_SECRET: string;
 }

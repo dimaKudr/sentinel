@@ -32,7 +32,7 @@ run window) lives in `src/config.ts`.
 ## Source layout
 
 - `src/config.ts` -- editable config surface (file/tab names, columns, run window)
-- `src/env.ts` -- typed `Env` interface for the three runtime secrets
+- `src/env.ts` -- typed `Env` interface for the four runtime secrets
 - `src/schedule.ts` -- DST-safe `isWithinRunWindow` check
 - `src/google-auth.ts` -- service-account JWT signing + OAuth2 token exchange
 - `src/drive.ts` -- Drive `files.list` lookup by name
@@ -43,7 +43,7 @@ run window) lives in `src/config.ts`.
 ## One-time external setup
 
 These steps happen outside this repo; the resulting values become the
-three Cloudflare secrets below. Nothing here should ever be committed
+four Cloudflare secrets below. Nothing here should ever be committed
 to source control.
 
 ### 1. Google Cloud service account
@@ -70,7 +70,18 @@ to source control.
    find the channel's `chat.id` (channel IDs are usually negative,
    e.g. `-1001234567890`). This becomes `TELEGRAM_CHAT_ID`.
 
-### 3. Cloudflare account
+### 3. Run secret
+
+Generate a random value yourself (no external service involved), e.g.:
+
+```sh
+openssl rand -hex 32
+```
+
+This becomes `RUN_SECRET`, the shared secret required to hit the
+manual `/run` route.
+
+### 4. Cloudflare account
 
 You'll need `wrangler` authenticated against your Cloudflare account:
 
@@ -85,7 +96,13 @@ is written to the repo):
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
 npx wrangler secret put TELEGRAM_BOT_TOKEN
 npx wrangler secret put TELEGRAM_CHAT_ID
+npx wrangler secret put RUN_SECRET
 ```
+
+`RUN_SECRET` is a shared secret you generate yourself (e.g. `openssl rand
+-hex 32`) -- it authenticates requests to the manual `/run` route so that
+anyone who finds the deployed `*.workers.dev` URL can't trigger a real
+Telegram send and burn Google/Telegram API quota.
 
 ## Local development
 
@@ -104,10 +121,11 @@ npm run dev
 ```
 
 Then hit the manual trigger route to run the job immediately and
-verify a message arrives in Telegram:
+verify a message arrives in Telegram, passing the `RUN_SECRET` from
+`.dev.vars` as the `X-Run-Secret` header:
 
 ```sh
-curl http://localhost:8787/run
+curl -H "X-Run-Secret: $RUN_SECRET" http://localhost:8787/run
 ```
 
 ## Testing
@@ -134,8 +152,13 @@ npm run deploy
 
 This deploys the Worker and registers the hourly cron trigger defined
 in `wrangler.jsonc`. After deploying, hit `/run` on the deployed Worker
-URL once to confirm everything is wired correctly end-to-end before
-trusting the schedule.
+URL once, passing the `RUN_SECRET` you set with `wrangler secret put`,
+to confirm everything is wired correctly end-to-end before trusting
+the schedule:
+
+```sh
+curl -H "X-Run-Secret: $RUN_SECRET" https://sentinel.<your-subdomain>.workers.dev/run
+```
 
 ## Manual testing checklist
 

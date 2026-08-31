@@ -18,6 +18,17 @@ import { findFileIdByName } from "./drive";
 import { getSheetValues, filterRows } from "./sheets";
 import { formatTelegramMessage, sendTelegram } from "./telegram";
 
+/**
+ * Guards the manual `/run` route behind the `RUN_SECRET` shared secret,
+ * sent by the caller via the `X-Run-Secret` header. Fails closed: if
+ * `env.RUN_SECRET` is unset or empty, the route is treated as inaccessible
+ * rather than open.
+ */
+function isAuthorizedRunRequest(request: Request, env: Env): boolean {
+  if (!env.RUN_SECRET) return false;
+  return request.headers.get("X-Run-Secret") === env.RUN_SECRET;
+}
+
 async function runJob(env: Env): Promise<void> {
   const token = await getGoogleAccessToken(env);
   const fileId = await findFileIdByName(token, CONFIG.FILE_NAME);
@@ -36,6 +47,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/run") {
+      if (!isAuthorizedRunRequest(request, env)) {
+        return new Response("ERROR: unauthorized\n", { status: 401 });
+      }
       try {
         await runJob(env);
         return new Response("OK - job ran, check Telegram.\n");
