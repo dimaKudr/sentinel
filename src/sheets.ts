@@ -50,7 +50,7 @@ export function parseNumber(value: unknown): number {
 }
 
 /**
- * Filters sheet rows to those where Target < PV $, resolving column
+ * Filters sheet rows to those where Target > PV $, resolving column
  * positions by (case-insensitive, trimmed) header name rather than fixed
  * index.
  *
@@ -94,7 +94,7 @@ export function filterRows(
 
     const target = parseNumber(row[targetIdx]);
     const pv = parseNumber(row[pvIdx]);
-    if (!Number.isNaN(target) && !Number.isNaN(pv) && target < pv) {
+    if (!Number.isNaN(target) && !Number.isNaN(pv) && target > pv) {
       results.push({ ticker: row[tickerIdx] ?? "", target, pv });
     }
   }

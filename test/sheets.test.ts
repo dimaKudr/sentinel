@@ -53,18 +53,18 @@ describe("filterRows", () => {
     ];
   }
 
-  it("finds headers at HEADER_ROW (3) and filters Target < PV", () => {
+  it("finds headers at HEADER_ROW (3) and filters Target > PV", () => {
     const rows = sheetWithHeaderAtRow3([
-      ["AAA", "10", "12"], // match: 10 < 12
-      ["BBB", "20", "15"], // no match: 20 >= 15
-      ["CCC", "$5.00", "$9.50"], // match, currency-formatted
+      ["AAA", "12", "10"], // match: 12 > 10
+      ["BBB", "15", "20"], // no match: 15 <= 20
+      ["CCC", "$9.50", "$5.00"], // match, currency-formatted
     ]);
 
     const result = filterRows(rows, config);
 
     expect(result).toEqual([
-      { ticker: "AAA", target: 10, pv: 12 },
-      { ticker: "CCC", target: 5, pv: 9.5 },
+      { ticker: "AAA", target: 12, pv: 10 },
+      { ticker: "CCC", target: 9.5, pv: 5 },
     ]);
   });
 
@@ -73,32 +73,32 @@ describe("filterRows", () => {
       ["ignore", "", ""],
       ["ignore", "", ""],
       [" ticker ", " TARGET ", " pv $ "],
-      ["AAA", "1", "2"],
+      ["AAA", "2", "1"],
     ];
 
     const result = filterRows(rows, config);
 
-    expect(result).toEqual([{ ticker: "AAA", target: 1, pv: 2 }]);
+    expect(result).toEqual([{ ticker: "AAA", target: 2, pv: 1 }]);
   });
 
   it("skips rows with unparseable numbers instead of throwing", () => {
     const rows = sheetWithHeaderAtRow3([
       ["AAA", "n/a", "12"],
       ["BBB", "10", ""],
-      ["CCC", "1", "2"],
+      ["CCC", "2", "1"],
     ]);
 
     const result = filterRows(rows, config);
 
-    expect(result).toEqual([{ ticker: "CCC", target: 1, pv: 2 }]);
+    expect(result).toEqual([{ ticker: "CCC", target: 2, pv: 1 }]);
   });
 
   it("skips empty/short rows", () => {
-    const rows = sheetWithHeaderAtRow3([[], ["AAA", "1", "2"]]);
+    const rows = sheetWithHeaderAtRow3([[], ["AAA", "2", "1"]]);
 
     const result = filterRows(rows, config);
 
-    expect(result).toEqual([{ ticker: "AAA", target: 1, pv: 2 }]);
+    expect(result).toEqual([{ ticker: "AAA", target: 2, pv: 1 }]);
   });
 
   it("throws a descriptive error listing actual headers when a configured column is missing", () => {
@@ -123,11 +123,11 @@ describe("filterRows", () => {
   it("supports rowsStartAtHeaderRow for ranges already trimmed to the header row", () => {
     const rows = [
       ["Ticker", "Target", "PV $"],
-      ["AAA", "1", "2"],
+      ["AAA", "2", "1"],
     ];
 
     const result = filterRows(rows, config, { rowsStartAtHeaderRow: true });
 
-    expect(result).toEqual([{ ticker: "AAA", target: 1, pv: 2 }]);
+    expect(result).toEqual([{ ticker: "AAA", target: 2, pv: 1 }]);
   });
 });

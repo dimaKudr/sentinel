@@ -22,7 +22,7 @@ export function formatTelegramMessage(matches: WatchListMatch[], now: Date = new
   const heading = `\u{1F4CA} <b>Watch-List Alert</b> (${timestamp})`;
 
   if (matches.length === 0) {
-    return `${heading}\nNo stocks currently have Target &lt; PV $.`;
+    return `${heading}\nNo stocks currently have Target &gt; PV $.`;
   }
 
   const header = "Ticker    Target    PV $";

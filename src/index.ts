@@ -2,7 +2,7 @@
  * Sentinel -- Watch-List -> Telegram alert worker
  *
  * Reads a Google Sheet (by FILE NAME, not file ID, since the source file
- * gets deleted/recreated weekly), finds rows where Target < PV $, and
+ * gets deleted/recreated weekly), finds rows where Target > PV $, and
  * posts a formatted table to a Telegram channel.
  *
  * Runs every hour (cron), but only actually does work when the current

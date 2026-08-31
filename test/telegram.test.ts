@@ -8,7 +8,7 @@ describe("formatTelegramMessage", () => {
   it("produces a 'no matches' message when there are zero matches", () => {
     const message = formatTelegramMessage([], fixedNow);
 
-    expect(message).toContain("No stocks currently have Target &lt; PV $.");
+    expect(message).toContain("No stocks currently have Target &gt; PV $.");
     expect(message).toContain("Watch-List Alert");
     expect(message).not.toContain("<pre>");
   });

@@ -2,7 +2,7 @@
 
 A Cloudflare Worker that reads a Google Sheet watch-list from Google
 Drive (found **by file name**, not file ID, since the source file is
-deleted and recreated weekly), filters rows where `Target < PV $`,
+deleted and recreated weekly), filters rows where `Target > PV $`,
 formats the matches as a table, and posts them to a Telegram channel.
 
 It runs hourly via a Cloudflare Cron Trigger but self-gates to a local
@@ -21,7 +21,7 @@ Cron (hourly, every day)
             -> getGoogleAccessToken()   [service-account JWT -> OAuth token]
             -> findFileIdByName()       [Drive files.list, newest match by name]
             -> getSheetValues()         [Sheets values.get for the configured tab]
-            -> filterRows()             [Target < PV $, matched by header name]
+            -> filterRows()             [Target > PV $, matched by header name]
             -> formatTelegramMessage()  [HTML <pre> table]
             -> sendTelegram()           [Telegram Bot API sendMessage]
 ```
