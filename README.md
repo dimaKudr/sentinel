@@ -104,6 +104,17 @@ npx wrangler secret put RUN_SECRET
 anyone who finds the deployed `*.workers.dev` URL can't trigger a real
 Telegram send and burn Google/Telegram API quota.
 
+The Worker also needs a `SENTINEL_STATE` KV namespace binding (see
+`wrangler.jsonc`), used to remember each ticker's last-published PV so
+same-day re-alerts can be suppressed when nothing moved more than 1% --
+see `src/state.ts`. Create it once with:
+
+```sh
+npx wrangler kv namespace create SENTINEL_STATE
+```
+
+and add the printed `id` to the `kv_namespaces` entry in `wrangler.jsonc`.
+
 ## Local development
 
 Copy `.dev.vars.example` to `.dev.vars` and fill in real values (this
@@ -158,6 +169,13 @@ the schedule:
 
 ```sh
 curl -H "X-Run-Secret: $RUN_SECRET" https://sentinel.<your-subdomain>.workers.dev/run
+```
+
+Add `?force=true` to publish even when the PV-unchanged suppression (see
+`src/state.ts`) would otherwise skip the alert:
+
+```sh
+curl -H "X-Run-Secret: $RUN_SECRET" "https://sentinel.<your-subdomain>.workers.dev/run?force=true"
 ```
 
 ## Manual testing checklist

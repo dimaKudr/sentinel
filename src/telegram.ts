@@ -25,11 +25,18 @@ export function formatTelegramMessage(matches: WatchListMatch[], now: Date = new
     return `${heading}\nNo stocks currently have Target &gt; PV $.`;
   }
 
-  const header = "Ticker    Target    PV $";
-  const separator = "--------------------------";
-  const lines = matches.map(
-    (m) => `${String(m.ticker).padEnd(9)} ${m.target.toFixed(2).padEnd(9)} ${m.pv.toFixed(2)}`
-  );
+  const sorted = [...matches].sort((a, b) => {
+    const upsideA = (a.target - a.pv) / a.pv;
+    const upsideB = (b.target - b.pv) / b.pv;
+    return upsideB - upsideA;
+  });
+
+  const header = "Ticker    PV $      Target    Upside%";
+  const separator = "------------------------------------";
+  const lines = sorted.map((m) => {
+    const upside = ((m.target - m.pv) / m.pv) * 100;
+    return `${String(m.ticker).padEnd(9)} ${m.pv.toFixed(2).padEnd(9)} ${m.target.toFixed(2).padEnd(9)} ${upside.toFixed(1)}%`;
+  });
   const table = [header, separator, ...lines].join("\n");
 
   return `${heading}\n<pre>${escapeHtml(table)}</pre>`;

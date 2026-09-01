@@ -16,20 +16,33 @@ describe("formatTelegramMessage", () => {
   it("formats a table with matches inside a <pre> block", () => {
     const message = formatTelegramMessage(
       [
-        { ticker: "AAA", target: 10, pv: 12 },
-        { ticker: "BBB", target: 5, pv: 9.5 },
+        { ticker: "AAA", target: 15, pv: 10 },
+        { ticker: "BBB", target: 12, pv: 10 },
       ],
       fixedNow
     );
 
     expect(message).toContain("<pre>");
-    expect(message).toContain("Ticker    Target    PV $");
+    expect(message).toContain("Ticker    PV $      Target    Upside%");
     expect(message).toContain("AAA");
     expect(message).toContain("10.00");
-    expect(message).toContain("12.00");
+    expect(message).toContain("15.00");
+    expect(message).toContain("50.0%");
     expect(message).toContain("BBB");
-    expect(message).toContain("5.00");
-    expect(message).toContain("9.50");
+    expect(message).toContain("12.00");
+    expect(message).toContain("20.0%");
+  });
+
+  it("sorts rows by descending upside percentage", () => {
+    const message = formatTelegramMessage(
+      [
+        { ticker: "LOW", target: 11, pv: 10 },
+        { ticker: "HIGH", target: 20, pv: 10 },
+      ],
+      fixedNow
+    );
+
+    expect(message.indexOf("HIGH")).toBeLessThan(message.indexOf("LOW"));
   });
 
   it("HTML-escapes ticker values", () => {
@@ -49,6 +62,7 @@ describe("sendTelegram", () => {
     TELEGRAM_BOT_TOKEN: "test-token",
     TELEGRAM_CHAT_ID: "test-chat-id",
     RUN_SECRET: "test-run-secret",
+    SENTINEL_STATE: {} as KVNamespace,
   };
 
   afterEach(() => {
