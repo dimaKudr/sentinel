@@ -24,7 +24,16 @@
   // changeovers without ever needing to edit this file twice a year.
   "triggers": {
     "crons": ["0 * * * *"]
-  }
+  },
+
+  // Stores the last-published PV per ticker so we can suppress noisy
+  // re-alerts when nothing meaningfully changed -- see src/state.ts.
+  "kv_namespaces": [
+    {
+      "binding": "SENTINEL_STATE",
+      "id": "f4fb65b2250e4a6c822f3ca2c9dc5252"
+    }
+  ]
 
   // Runtime secrets (never put real values here -- set via `wrangler secret put`):
   //   GOOGLE_SERVICE_ACCOUNT_JSON

@@ -18,6 +18,10 @@ vi.mock("../src/telegram", () => ({
 vi.mock("../src/schedule", () => ({
   isWithinRunWindow: vi.fn(),
 }));
+vi.mock("../src/state", () => ({
+  shouldPublish: vi.fn(),
+  recordPublished: vi.fn(),
+}));
 
 import worker from "../src/index";
 import { getGoogleAccessToken } from "../src/google-auth";
@@ -25,12 +29,14 @@ import { findFileIdByName } from "../src/drive";
 import { getSheetValues, filterRows } from "../src/sheets";
 import { formatTelegramMessage, sendTelegram } from "../src/telegram";
 import { isWithinRunWindow } from "../src/schedule";
+import { shouldPublish, recordPublished } from "../src/state";
 
 const env: Env = {
   GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
   TELEGRAM_BOT_TOKEN: "test-token",
   TELEGRAM_CHAT_ID: "test-chat-id",
   RUN_SECRET: "test-run-secret",
+  SENTINEL_STATE: {} as KVNamespace,
 };
 
 function stubHappyPathPipeline(): void {
@@ -38,6 +44,8 @@ function stubHappyPathPipeline(): void {
   vi.mocked(findFileIdByName).mockResolvedValue("file-id");
   vi.mocked(getSheetValues).mockResolvedValue([["Ticker", "Target", "PV $"]]);
   vi.mocked(filterRows).mockReturnValue([]);
+  vi.mocked(shouldPublish).mockResolvedValue(true);
+  vi.mocked(recordPublished).mockResolvedValue(undefined);
   vi.mocked(formatTelegramMessage).mockReturnValue("message");
   vi.mocked(sendTelegram).mockResolvedValue(undefined);
 }
@@ -112,6 +120,52 @@ describe("fetch", () => {
     expect(response.status).toBe(500);
     const body = await response.text();
     expect(body).toContain("ERROR: token exchange failed");
+  });
+
+  it("/run does not publish to Telegram when shouldPublish returns false", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(shouldPublish).mockResolvedValue(false);
+    const request = new Request("https://worker.example/run", {
+      method: "GET",
+      headers: { "X-Run-Secret": "test-run-secret" },
+    });
+
+    const response = await worker.fetch(request, env);
+
+    expect(response.status).toBe(200);
+    expect(formatTelegramMessage).not.toHaveBeenCalled();
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("/run?force=true publishes even when shouldPublish would suppress it", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(shouldPublish).mockResolvedValue(false);
+    const request = new Request("https://worker.example/run?force=true", {
+      method: "GET",
+      headers: { "X-Run-Secret": "test-run-secret" },
+    });
+
+    const response = await worker.fetch(request, env);
+
+    expect(response.status).toBe(200);
+    expect(shouldPublish).not.toHaveBeenCalled();
+    expect(recordPublished).toHaveBeenCalledWith(env.SENTINEL_STATE, []);
+    expect(sendTelegram).toHaveBeenCalledWith(env, "message");
+  });
+
+  it("/run without force still applies the unchanged-PV suppression", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(shouldPublish).mockResolvedValue(false);
+    const request = new Request("https://worker.example/run", {
+      method: "GET",
+      headers: { "X-Run-Secret": "test-run-secret" },
+    });
+
+    const response = await worker.fetch(request, env);
+
+    expect(response.status).toBe(200);
+    expect(recordPublished).not.toHaveBeenCalled();
+    expect(sendTelegram).not.toHaveBeenCalled();
   });
 
   it("/run returns 401 and does not run the job when the X-Run-Secret header is missing", async () => {

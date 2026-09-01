@@ -17,6 +17,7 @@ import { getGoogleAccessToken } from "./google-auth";
 import { findFileIdByName } from "./drive";
 import { getSheetValues, filterRows } from "./sheets";
 import { formatTelegramMessage, sendTelegram } from "./telegram";
+import { shouldPublish, recordPublished } from "./state";
 
 /**
  * Guards the manual `/run` route behind the `RUN_SECRET` shared secret,
@@ -29,11 +30,18 @@ function isAuthorizedRunRequest(request: Request, env: Env): boolean {
   return request.headers.get("X-Run-Secret") === env.RUN_SECRET;
 }
 
-async function runJob(env: Env): Promise<void> {
+async function runJob(env: Env, options: { force?: boolean } = {}): Promise<void> {
   const token = await getGoogleAccessToken(env);
   const fileId = await findFileIdByName(token, CONFIG.FILE_NAME);
   const rows = await getSheetValues(token, fileId, CONFIG.SHEET_TAB);
   const matches = filterRows(rows, CONFIG);
+
+  if (options.force) {
+    await recordPublished(env.SENTINEL_STATE, matches);
+  } else if (!(await shouldPublish(env.SENTINEL_STATE, matches))) {
+    return;
+  }
+
   const message = formatTelegramMessage(matches);
   await sendTelegram(env, message);
 }
@@ -50,14 +58,17 @@ export default {
       if (!isAuthorizedRunRequest(request, env)) {
         return new Response("ERROR: unauthorized\n", { status: 401 });
       }
+      const force = url.searchParams.get("force") === "true";
       try {
-        await runJob(env);
+        await runJob(env, { force });
         return new Response("OK - job ran, check Telegram.\n");
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return new Response(`ERROR: ${message}\n`, { status: 500 });
       }
     }
-    return new Response("Watch-List Telegram worker.\nGET/POST /run to trigger manually.\n");
+    return new Response(
+      "Watch-List Telegram worker.\nGET/POST /run to trigger manually (add ?force=true to bypass the unchanged-PV suppression).\n"
+    );
   },
 } satisfies ExportedHandler<Env>;
