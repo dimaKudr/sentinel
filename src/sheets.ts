@@ -50,9 +50,11 @@ export function parseNumber(value: unknown): number {
 }
 
 /**
- * Filters sheet rows to those where Target > PV $, resolving column
- * positions by (case-insensitive, trimmed) header name rather than fixed
- * index.
+ * Filters sheet rows to those where Target > PV $ and WallSt > PV $,
+ * resolving column positions by (case-insensitive, trimmed) header name
+ * rather than fixed index. A row with an unparseable WallSt value isn't
+ * excluded by that rule -- there's nothing to compare, so it falls back
+ * to just the Target > PV $ check.
  *
  * `rows` is the raw values.get response, which is always anchored at A1.
  * The real header row lives at `config.HEADER_ROW` (1-based), so the header
@@ -63,7 +65,10 @@ export function parseNumber(value: unknown): number {
  */
 export function filterRows(
   rows: SheetRow[],
-  config: Pick<SentinelConfig, "HEADER_ROW" | "TICKER_COL" | "TARGET_COL" | "PV_COL">,
+  config: Pick<
+    SentinelConfig,
+    "HEADER_ROW" | "TICKER_COL" | "TARGET_COL" | "PV_COL" | "WALLST_COL"
+  >,
   options: { rowsStartAtHeaderRow?: boolean } = {}
 ): WatchListMatch[] {
   const headerIndex = options.rowsStartAtHeaderRow ? 0 : config.HEADER_ROW - 1;
@@ -80,8 +85,9 @@ export function filterRows(
   const tickerIdx = indexOf(config.TICKER_COL);
   const targetIdx = indexOf(config.TARGET_COL);
   const pvIdx = indexOf(config.PV_COL);
+  const wallStIdx = indexOf(config.WALLST_COL);
 
-  if (tickerIdx === -1 || targetIdx === -1 || pvIdx === -1) {
+  if (tickerIdx === -1 || targetIdx === -1 || pvIdx === -1 || wallStIdx === -1) {
     throw new Error(
       `Configured column(s) not found. Sheet headers were: [${headerRow.join(", ")}]`
     );
@@ -94,9 +100,12 @@ export function filterRows(
 
     const target = parseNumber(row[targetIdx]);
     const pv = parseNumber(row[pvIdx]);
-    if (!Number.isNaN(target) && !Number.isNaN(pv) && target > pv) {
-      results.push({ ticker: row[tickerIdx] ?? "", target, pv });
-    }
+    if (Number.isNaN(target) || Number.isNaN(pv) || target <= pv) continue;
+
+    const wallSt = parseNumber(row[wallStIdx]);
+    if (!Number.isNaN(wallSt) && wallSt <= pv) continue;
+
+    results.push({ ticker: row[tickerIdx] ?? "", target, pv });
   }
   return results;
 }
