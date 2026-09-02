@@ -24,6 +24,7 @@ export interface SentinelConfig {
   TICKER_COL: string;
   TARGET_COL: string;
   PV_COL: string;
+  WALLST_COL: string;
   RUN_WINDOW: RunWindow;
 }
 
@@ -34,6 +35,7 @@ export const CONFIG: SentinelConfig = {
   TICKER_COL: "Ticker",
   TARGET_COL: "Target",
   PV_COL: "PV $",
+  WALLST_COL: "WallSt",
   RUN_WINDOW: { startHour: 16, endHour: 21 },
 };
 

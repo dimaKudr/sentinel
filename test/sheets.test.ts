@@ -42,22 +42,23 @@ describe("filterRows", () => {
     TICKER_COL: CONFIG.TICKER_COL,
     TARGET_COL: CONFIG.TARGET_COL,
     PV_COL: CONFIG.PV_COL,
+    WALLST_COL: CONFIG.WALLST_COL,
   };
 
   function sheetWithHeaderAtRow3(dataRows: string[][]): string[][] {
     return [
-      ["Watch-List", "", ""],
-      ["generated 2026-08-31", "", ""],
-      ["Ticker", "Target", "PV $"],
+      ["Watch-List", "", "", ""],
+      ["generated 2026-08-31", "", "", ""],
+      ["Ticker", "Target", "PV $", "WallSt"],
       ...dataRows,
     ];
   }
 
   it("finds headers at HEADER_ROW (3) and filters Target > PV", () => {
     const rows = sheetWithHeaderAtRow3([
-      ["AAA", "12", "10"], // match: 12 > 10
-      ["BBB", "15", "20"], // no match: 15 <= 20
-      ["CCC", "$9.50", "$5.00"], // match, currency-formatted
+      ["AAA", "12", "10", "11"], // match: 12 > 10, WallSt > PV
+      ["BBB", "15", "20", "21"], // no match: 15 <= 20
+      ["CCC", "$9.50", "$5.00", "6"], // match, currency-formatted
     ]);
 
     const result = filterRows(rows, config);
@@ -68,12 +69,32 @@ describe("filterRows", () => {
     ]);
   });
 
+  it("excludes a Target > PV match when WallSt is not greater than PV", () => {
+    const rows = sheetWithHeaderAtRow3([
+      ["AAA", "12", "10", "10.01"], // WallSt > PV -- kept
+      ["BBB", "12", "10", "10"], // WallSt == PV -- dropped
+      ["CCC", "12", "10", "9"], // WallSt < PV -- dropped
+    ]);
+
+    const result = filterRows(rows, config);
+
+    expect(result).toEqual([{ ticker: "AAA", target: 12, pv: 10 }]);
+  });
+
+  it("keeps a Target > PV match when WallSt is unparseable", () => {
+    const rows = sheetWithHeaderAtRow3([["AAA", "12", "10", "n/a"]]);
+
+    const result = filterRows(rows, config);
+
+    expect(result).toEqual([{ ticker: "AAA", target: 12, pv: 10 }]);
+  });
+
   it("matches headers case-insensitively and trims whitespace", () => {
     const rows = [
-      ["ignore", "", ""],
-      ["ignore", "", ""],
-      [" ticker ", " TARGET ", " pv $ "],
-      ["AAA", "2", "1"],
+      ["ignore", "", "", ""],
+      ["ignore", "", "", ""],
+      [" ticker ", " TARGET ", " pv $ ", " wallst "],
+      ["AAA", "2", "1", "2"],
     ];
 
     const result = filterRows(rows, config);
@@ -83,9 +104,9 @@ describe("filterRows", () => {
 
   it("skips rows with unparseable numbers instead of throwing", () => {
     const rows = sheetWithHeaderAtRow3([
-      ["AAA", "n/a", "12"],
-      ["BBB", "10", ""],
-      ["CCC", "2", "1"],
+      ["AAA", "n/a", "12", "13"],
+      ["BBB", "10", "", "1"],
+      ["CCC", "2", "1", "2"],
     ]);
 
     const result = filterRows(rows, config);
@@ -94,7 +115,7 @@ describe("filterRows", () => {
   });
 
   it("skips empty/short rows", () => {
-    const rows = sheetWithHeaderAtRow3([[], ["AAA", "2", "1"]]);
+    const rows = sheetWithHeaderAtRow3([[], ["AAA", "2", "1", "2"]]);
 
     const result = filterRows(rows, config);
 
@@ -103,14 +124,14 @@ describe("filterRows", () => {
 
   it("throws a descriptive error listing actual headers when a configured column is missing", () => {
     const rows = [
-      ["ignore", "", ""],
-      ["ignore", "", ""],
-      ["Symbol", "Target Price", "Current"],
-      ["AAA", "1", "2"],
+      ["ignore", "", "", ""],
+      ["ignore", "", "", ""],
+      ["Symbol", "Target Price", "Current", "WallSt"],
+      ["AAA", "1", "2", "3"],
     ];
 
     expect(() => filterRows(rows, config)).toThrowError(
-      /Configured column\(s\) not found\. Sheet headers were: \[Symbol, Target Price, Current\]/
+      /Configured column\(s\) not found\. Sheet headers were: \[Symbol, Target Price, Current, WallSt\]/
     );
   });
 
@@ -122,8 +143,8 @@ describe("filterRows", () => {
 
   it("supports rowsStartAtHeaderRow for ranges already trimmed to the header row", () => {
     const rows = [
-      ["Ticker", "Target", "PV $"],
-      ["AAA", "2", "1"],
+      ["Ticker", "Target", "PV $", "WallSt"],
+      ["AAA", "2", "1", "2"],
     ];
 
     const result = filterRows(rows, config, { rowsStartAtHeaderRow: true });
