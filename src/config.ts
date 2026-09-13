@@ -37,7 +37,7 @@ export const CONFIG: SentinelConfig = {
   TARGET_COL: "Target",
   PV_COL: "PV $",
   WALLST_COL: "WallSt",
-  WATCHLIST_COL: "Watchlist",
+  WATCHLIST_COL: "Group",
   RUN_WINDOW: { startHour: 16, endHour: 21 },
 };
 

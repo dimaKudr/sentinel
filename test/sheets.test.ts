@@ -50,7 +50,7 @@ describe("filterRows", () => {
     return [
       ["Watch-List", "", "", "", ""],
       ["generated 2026-08-31", "", "", "", ""],
-      ["Ticker", "Target", "PV $", "WallSt", "Watchlist"],
+      ["Ticker", "Target", "PV $", "WallSt", "Group"],
       ...dataRows,
     ];
   }
@@ -94,7 +94,7 @@ describe("filterRows", () => {
     const rows = [
       ["ignore", "", "", "", ""],
       ["ignore", "", "", "", ""],
-      [" ticker ", " TARGET ", " pv $ ", " wallst ", " WATCHLIST "],
+      [" ticker ", " TARGET ", " pv $ ", " wallst ", " GROUP "],
       ["AAA", "2", "1", "2", "Core"],
     ];
 
@@ -127,12 +127,12 @@ describe("filterRows", () => {
     const rows = [
       ["ignore", "", "", "", ""],
       ["ignore", "", "", "", ""],
-      ["Symbol", "Target Price", "Current", "WallSt", "Watchlist"],
+      ["Symbol", "Target Price", "Current", "WallSt", "Group"],
       ["AAA", "1", "2", "3", "Core"],
     ];
 
     expect(() => filterRows(rows, config)).toThrowError(
-      /Configured column\(s\) not found\. Sheet headers were: \[Symbol, Target Price, Current, WallSt, Watchlist\]/
+      /Configured column\(s\) not found\. Sheet headers were: \[Symbol, Target Price, Current, WallSt, Group\]/
     );
   });
 
@@ -155,7 +155,7 @@ describe("filterRows", () => {
 
   it("supports rowsStartAtHeaderRow for ranges already trimmed to the header row", () => {
     const rows = [
-      ["Ticker", "Target", "PV $", "WallSt", "Watchlist"],
+      ["Ticker", "Target", "PV $", "WallSt", "Group"],
       ["AAA", "2", "1", "2", "Core"],
     ];
 
