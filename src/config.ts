@@ -25,6 +25,7 @@ export interface SentinelConfig {
   TARGET_COL: string;
   PV_COL: string;
   WALLST_COL: string;
+  WATCHLIST_COL: string;
   RUN_WINDOW: RunWindow;
 }
 
@@ -36,8 +37,26 @@ export const CONFIG: SentinelConfig = {
   TARGET_COL: "Target",
   PV_COL: "PV $",
   WALLST_COL: "WallSt",
+  WATCHLIST_COL: "Watchlist",
   RUN_WINDOW: { startHour: 16, endHour: 21 },
 };
 
 /** IANA timezone the run window and displayed timestamps are evaluated in. */
 export const TIME_ZONE = "Europe/Prague";
+
+/**
+ * The 3 canonical watch-list buckets a row's `Watchlist` cell can resolve
+ * to (case-insensitive, trimmed match -- see `filterRows` in src/sheets.ts).
+ * Anything else (blank, typo, unrecognized) falls back to `"Other"`, which
+ * isn't part of this list since it's never gated by the per-group publish
+ * suppression in src/state.ts.
+ */
+export const CANONICAL_WATCHLIST_GROUPS = ["Core", "Opportunities", "Speculative"] as const;
+
+export type CanonicalWatchlistGroup = (typeof CANONICAL_WATCHLIST_GROUPS)[number];
+
+/** A row's resolved group, including the catch-all bucket. */
+export type WatchlistGroup = CanonicalWatchlistGroup | "Other";
+
+/** Fixed rendering/iteration order for the Telegram message: Core -> Opportunities -> Speculative -> Other. */
+export const GROUP_ORDER: readonly WatchlistGroup[] = [...CANONICAL_WATCHLIST_GROUPS, "Other"];

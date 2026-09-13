@@ -10,14 +10,15 @@
  * the schedule immune to daylight-saving changeovers -- no need to touch
  * the cron expression twice a year.
  */
-import { CONFIG } from "./config";
+import { CANONICAL_WATCHLIST_GROUPS, CONFIG, GROUP_ORDER } from "./config";
 import type { Env } from "./env";
 import { isWithinRunWindow } from "./schedule";
 import { getGoogleAccessToken } from "./google-auth";
 import { findFileIdByName } from "./drive";
-import { getSheetValues, filterRows } from "./sheets";
+import { getSheetValues, filterRows, groupMatchesByWatchlist } from "./sheets";
+import type { WatchlistGroupSection } from "./telegram";
 import { formatTelegramMessage, sendTelegram } from "./telegram";
-import { shouldPublish, recordPublished } from "./state";
+import { decideGroupsToPublish, recordGroupsPublished } from "./state";
 
 /**
  * Guards the manual `/run` route behind the `RUN_SECRET` shared secret,
@@ -30,19 +31,46 @@ function isAuthorizedRunRequest(request: Request, env: Env): boolean {
   return request.headers.get("X-Run-Secret") === env.RUN_SECRET;
 }
 
+/**
+ * Builds the final render set: the 3 canonical groups marked "to show" by
+ * the state module, plus `Other` unconditionally whenever it has any
+ * current matches (it's never gated by suppression -- see src/state.ts).
+ * Order follows `GROUP_ORDER` (Core -> Opportunities -> Speculative ->
+ * Other) regardless of the order `groupsToShow` was computed in.
+ */
+function buildRenderSet(
+  matchesByGroup: ReturnType<typeof groupMatchesByWatchlist>,
+  groupsToShow: readonly string[]
+): WatchlistGroupSection[] {
+  const toShow = new Set<string>(groupsToShow);
+  const sections: WatchlistGroupSection[] = [];
+  for (const group of GROUP_ORDER) {
+    const matches = matchesByGroup[group];
+    if (matches.length === 0) continue;
+    if (group !== "Other" && !toShow.has(group)) continue;
+    sections.push({ group, matches });
+  }
+  return sections;
+}
+
 async function runJob(env: Env, options: { force?: boolean } = {}): Promise<void> {
   const token = await getGoogleAccessToken(env);
   const fileId = await findFileIdByName(token, CONFIG.FILE_NAME);
   const rows = await getSheetValues(token, fileId, CONFIG.SHEET_TAB);
   const matches = filterRows(rows, CONFIG);
+  const matchesByGroup = groupMatchesByWatchlist(matches);
+  const canonicalMatches = Object.fromEntries(
+    CANONICAL_WATCHLIST_GROUPS.map((g) => [g, matchesByGroup[g]])
+  ) as Record<(typeof CANONICAL_WATCHLIST_GROUPS)[number], typeof matches>;
 
-  if (options.force) {
-    await recordPublished(env.SENTINEL_STATE, matches);
-  } else if (!(await shouldPublish(env.SENTINEL_STATE, matches))) {
-    return;
-  }
+  const groupsToShow = options.force
+    ? await recordGroupsPublished(env.SENTINEL_STATE, canonicalMatches)
+    : await decideGroupsToPublish(env.SENTINEL_STATE, canonicalMatches);
 
-  const message = formatTelegramMessage(matches);
+  const sections = buildRenderSet(matchesByGroup, groupsToShow);
+  if (sections.length === 0) return;
+
+  const message = formatTelegramMessage(sections);
   await sendTelegram(env, message);
 }
 

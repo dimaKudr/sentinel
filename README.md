@@ -3,8 +3,10 @@
 A Cloudflare Worker that reads a Google Sheet watch-list from Google
 Drive (found **by file name**, not file ID, since the source file is
 deleted and recreated weekly), filters rows where `Target > PV $` and
-`WallSt > PV $`, formats the matches as a table, and posts them to a
-Telegram channel.
+`WallSt > PV $`, groups the matches by their `Watchlist` column value
+(`Core`, `Opportunities`, `Speculative`, or the catch-all `Other` for
+anything blank/unrecognized), formats each group as its own table, and
+posts them all in a single Telegram message.
 
 It runs hourly via a Cloudflare Cron Trigger but self-gates to a local
 time window (Mon-Fri, 16:00-21:00 Europe/Prague by default) computed at
@@ -17,18 +19,34 @@ demand, independent of the cron, for testing.
 
 ```
 Cron (hourly, every day)
-  -> isWithinRunWindow()   [Europe/Prague local time check]
+  -> isWithinRunWindow()          [Europe/Prague local time check]
        -> runJob()
-            -> getGoogleAccessToken()   [service-account JWT -> OAuth token]
-            -> findFileIdByName()       [Drive files.list, newest match by name]
-            -> getSheetValues()         [Sheets values.get for the configured tab]
-            -> filterRows()             [Target > PV $ and WallSt > PV $, matched by header name]
-            -> formatTelegramMessage()  [HTML <pre> table]
-            -> sendTelegram()           [Telegram Bot API sendMessage]
+            -> getGoogleAccessToken()       [service-account JWT -> OAuth token]
+            -> findFileIdByName()           [Drive files.list, newest match by name]
+            -> getSheetValues()             [Sheets values.get for the configured tab]
+            -> filterRows()                 [Target > PV $ and WallSt > PV $, tagged with Watchlist group]
+            -> groupMatchesByWatchlist()    [buckets into Core/Opportunities/Speculative/Other]
+            -> decideGroupsToPublish()      [per-group 1%-change suppression, Core/Opportunities/Speculative only]
+            -> formatTelegramMessage()      [one HTML message, one <pre> table per shown group]
+            -> sendTelegram()               [Telegram Bot API sendMessage -- skipped if nothing to show]
 ```
 
-Config (spreadsheet name, tab name, header row, column names, and the
-run window) lives in `src/config.ts`.
+Config (spreadsheet name, tab name, header row, column names including
+`WATCHLIST_COL`, and the run window) lives in `src/config.ts`.
+
+Each run's Telegram message stacks up to 4 tables, always in the order
+**Core -> Opportunities -> Speculative -> Other**:
+
+- The 3 canonical groups (`Core`, `Opportunities`, `Speculative`) each
+  get their own independent 1%-PV-change/new-ticker/first-publish-of-day
+  suppression (see `src/state.ts`) -- one group changing doesn't affect
+  another's suppression state. An empty group is silently omitted.
+- `Other` catches any row whose `Watchlist` cell doesn't match one of
+  the 3 canonical names (blank, typo, etc.) and is **always shown when
+  non-empty**, regardless of whether anything changed -- it's meant to
+  surface a likely data-entry problem, not to be suppressed.
+- If nothing across all 4 groups is worth showing, no Telegram message
+  is sent at all for that run.
 
 ## Source layout
 
@@ -37,8 +55,8 @@ run window) lives in `src/config.ts`.
 - `src/schedule.ts` -- DST-safe `isWithinRunWindow` check
 - `src/google-auth.ts` -- service-account JWT signing + OAuth2 token exchange
 - `src/drive.ts` -- Drive `files.list` lookup by name
-- `src/sheets.ts` -- Sheets `values.get`, number parsing, row filtering
-- `src/telegram.ts` -- HTML table formatting + Telegram `sendMessage`
+- `src/sheets.ts` -- Sheets `values.get`, number parsing, row filtering, Watchlist grouping
+- `src/telegram.ts` -- HTML table formatting (per group) + Telegram `sendMessage`
 - `src/index.ts` -- Worker entry points (`scheduled`, `fetch`)
 
 ## One-time external setup
@@ -106,9 +124,12 @@ anyone who finds the deployed `*.workers.dev` URL can't trigger a real
 Telegram send and burn Google/Telegram API quota.
 
 The Worker also needs a `SENTINEL_STATE` KV namespace binding (see
-`wrangler.jsonc`), used to remember each ticker's last-published PV so
-same-day re-alerts can be suppressed when nothing moved more than 1% --
-see `src/state.ts`. Create it once with:
+`wrangler.jsonc`), used to remember each ticker's last-published PV, per
+`Watchlist` group (`Core`/`Opportunities`/`Speculative`), so same-day
+re-alerts can be suppressed independently per group when nothing in that
+group moved more than 1% -- see `src/state.ts`. The catch-all `Other`
+group has no stored state since it's never suppressed. Create the KV
+namespace once with:
 
 ```sh
 npx wrangler kv namespace create SENTINEL_STATE
@@ -148,10 +169,14 @@ npm test
 ```
 
 Unit tests (Vitest, via `@cloudflare/vitest-pool-workers`) cover the
-run-window boundary logic, number parsing, row filtering (including
-the missing-column error and header-row offset), and Telegram message
-formatting. All outbound `fetch` calls to Google/Telegram are mocked --
-no live network calls or real secrets are used in tests.
+run-window boundary logic, number parsing, row filtering and Watchlist
+grouping (including the missing-column error, header-row offset, and
+case/whitespace-tolerant group matching), per-group publish suppression
+independence, multi-table Telegram message formatting/ordering, and
+end-to-end `runJob` scenarios (mixed per-group changes, all-quiet/no-send,
+forced runs, and `Other`-only runs). All outbound `fetch` calls to
+Google/Telegram are mocked -- no live network calls or real secrets are
+used in tests.
 
 ## Deployment
 
@@ -172,8 +197,9 @@ the schedule:
 curl -H "X-Run-Secret: $RUN_SECRET" https://sentinel.<your-subdomain>.workers.dev/run
 ```
 
-Add `?force=true` to publish even when the PV-unchanged suppression (see
-`src/state.ts`) would otherwise skip the alert:
+Add `?force=true` to publish every non-empty canonical group (`Core`,
+`Opportunities`, `Speculative`) plus `Other` (if present), bypassing the
+per-group PV-unchanged suppression (see `src/state.ts`):
 
 ```sh
 curl -H "X-Run-Secret: $RUN_SECRET" "https://sentinel.<your-subdomain>.workers.dev/run?force=true"
@@ -181,13 +207,24 @@ curl -H "X-Run-Secret: $RUN_SECRET" "https://sentinel.<your-subdomain>.workers.d
 
 ## Manual testing checklist
 
-- [ ] Hit `/run` manually and confirm a Telegram message arrives
+- [ ] Hit `/run` manually and confirm a Telegram message arrives with
+      one table per group that has matches, in the order Core ->
+      Opportunities -> Speculative -> Other
 - [ ] Temporarily rename the Drive file, confirm the job still finds
       it by name
-- [ ] Point the config at a wrong header name, confirm the error
-      message lists the actual headers found
-- [ ] Confirm a zero-match sheet sends a "no matches" message, not
-      silence or an error
+- [ ] Point the config at a wrong header name (including
+      `WATCHLIST_COL`), confirm the error message lists the actual
+      headers found
+- [ ] Confirm a fully-quiet run (all 4 groups empty or suppressed)
+      sends no Telegram message at all, rather than a "no matches"
+      notice
+- [ ] Give a row a blank or mistyped `Watchlist` value and confirm it
+      always appears under `Other`, even on a run where nothing else
+      changed
+- [ ] Confirm a PV move past 1% in one canonical group shows only that
+      group's table, leaving unrelated groups suppressed
+- [ ] Hit `/run?force=true` and confirm every non-empty canonical group
+      plus `Other` (if present) is shown, regardless of suppression
 - [ ] Confirm the hourly cron does nothing outside the configured
       window (check the Cloudflare dashboard invocation logs)
 - [ ] Verify number parsing against currency-formatted cells (e.g.

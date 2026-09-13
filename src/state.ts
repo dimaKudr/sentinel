@@ -1,26 +1,36 @@
 import type { WatchListMatch } from "./sheets";
-import { TIME_ZONE } from "./config";
+import type { CanonicalWatchlistGroup } from "./config";
+import { CANONICAL_WATCHLIST_GROUPS, TIME_ZONE } from "./config";
 
 const STATE_KEY = "last-published";
 const CHANGE_THRESHOLD = 0.01; // 1%
 
-interface StoredState {
-  /** Europe/Prague calendar date (YYYY-MM-DD) of the last publish. */
+interface GroupState {
+  /** Europe/Prague calendar date (YYYY-MM-DD) of the group's last publish. */
   date: string;
-  /** PV per ticker as of the last publish. */
+  /** PV per ticker, within this group, as of the group's last publish. */
   pv: Record<string, number>;
 }
 
-function todayInTimeZone(now: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(now);
-}
+/**
+ * One KV blob holding all 3 canonical groups' state, keyed by group name.
+ * A single key means one atomic get/put per run instead of 3 separate KV
+ * reads/writes, avoiding partial-write races between groups. `Other` never
+ * appears here -- it's never gated by suppression, so it has no history to
+ * anchor (see `decideGroupsToPublish`/`recordGroupsPublished`).
+ */
+type StoredState = Partial<Record<CanonicalWatchlistGroup, GroupState>>;
 
-async function readState(kv: KVNamespace): Promise<StoredState | null> {
-  return kv.get<StoredState>(STATE_KEY, "json");
+async function readState(kv: KVNamespace): Promise<StoredState> {
+  return (await kv.get<StoredState>(STATE_KEY, "json")) ?? {};
 }
 
 async function writeState(kv: KVNamespace, state: StoredState): Promise<void> {
   await kv.put(STATE_KEY, JSON.stringify(state));
+}
+
+function todayInTimeZone(now: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(now);
 }
 
 function pvByTicker(matches: WatchListMatch[]): Record<string, number> {
@@ -30,59 +40,97 @@ function pvByTicker(matches: WatchListMatch[]): Record<string, number> {
 }
 
 /**
- * Decides whether `matches` are worth publishing, and updates the stored
- * state to the current PVs when they are.
- *
- * Rules:
- * - No current matches always publishes (reports the list going clear).
- * - The first publish of the calendar day (Europe/Prague) always goes out,
- *   regardless of how small the change is.
- * - Otherwise, all-or-nothing: the whole alert is skipped only when every
- *   matching ticker's PV is within 1% of what was last published for it. A
- *   brand new ticker, or any PV move past that threshold, publishes the lot.
- *
- * Suppressed runs don't touch the stored state, so the 1% threshold stays
- * anchored to the last value actually published (no slow drift).
+ * A group is "changed" (worth publishing) when it's the first publish of
+ * the calendar day (Europe/Prague) for that group, or when any of its
+ * current tickers' PV moved past the 1% threshold since that group's last
+ * published state (a brand-new ticker counts as a move). Mirrors the
+ * previous single-group `shouldPublish` rule, just scoped to one group's
+ * own stored state instead of a single global one.
  */
-export async function shouldPublish(
-  kv: KVNamespace,
-  matches: WatchListMatch[],
-  now: Date = new Date()
-): Promise<boolean> {
-  const today = todayInTimeZone(now);
-
-  if (matches.length === 0) {
-    await writeState(kv, { date: today, pv: {} });
-    return true;
-  }
-
-  const previous = await readState(kv);
+function hasGroupChanged(matches: WatchListMatch[], previous: GroupState | undefined, today: string): boolean {
   const isFirstPublishToday = previous?.date !== today;
+  if (isFirstPublishToday) return true;
 
-  const changed =
-    isFirstPublishToday ||
-    matches.some((m) => {
-      const prevPv = previous?.pv[m.ticker];
-      if (prevPv === undefined || prevPv === 0) return true;
-      return Math.abs(m.pv - prevPv) / prevPv > CHANGE_THRESHOLD;
-    });
-
-  if (!changed) return false;
-
-  await writeState(kv, { date: today, pv: pvByTicker(matches) });
-  return true;
+  return matches.some((m) => {
+    const prevPv = previous?.pv[m.ticker];
+    if (prevPv === undefined || prevPv === 0) return true;
+    return Math.abs(m.pv - prevPv) / prevPv > CHANGE_THRESHOLD;
+  });
 }
 
 /**
- * Unconditionally records `matches` as the last-published state, without
- * deciding whether to publish. Used when a publish is forced (e.g. the
- * manual `/run?force=true` route) so the 1% threshold still anchors to
- * this run's values instead of going stale.
+ * Decides, independently per canonical group (Core, Opportunities,
+ * Speculative), whether its current matches are worth publishing --
+ * and persists updated state only for the groups that are shown.
+ *
+ * Rules per group (unchanged from the previous single-group behavior,
+ * just scoped to that group's own matches/state):
+ * - An empty group is never shown, and its state is left untouched (per
+ *   decision #4 -- there's nothing to anchor, and no "cleared" notice).
+ * - The first publish of the calendar day for that group always shows it.
+ * - Otherwise, all-or-nothing per group: skipped only when every one of
+ *   the group's tickers' PV is within 1% of what was last published for
+ *   it. A brand new ticker, or any PV move past that threshold, shows the
+ *   whole group.
+ *
+ * Groups that aren't shown (whether empty or suppressed) don't have their
+ * stored state touched, so the 1% threshold for each stays anchored to the
+ * last value actually published for that group (no slow drift).
  */
-export async function recordPublished(
+export async function decideGroupsToPublish(
   kv: KVNamespace,
-  matches: WatchListMatch[],
+  matchesByGroup: Record<CanonicalWatchlistGroup, WatchListMatch[]>,
   now: Date = new Date()
-): Promise<void> {
-  await writeState(kv, { date: todayInTimeZone(now), pv: pvByTicker(matches) });
+): Promise<CanonicalWatchlistGroup[]> {
+  const today = todayInTimeZone(now);
+  const previous = await readState(kv);
+
+  const toShow: CanonicalWatchlistGroup[] = [];
+  const next: StoredState = { ...previous };
+
+  for (const group of CANONICAL_WATCHLIST_GROUPS) {
+    const matches = matchesByGroup[group];
+    if (matches.length === 0) continue;
+
+    if (!hasGroupChanged(matches, previous[group], today)) continue;
+
+    toShow.push(group);
+    next[group] = { date: today, pv: pvByTicker(matches) };
+  }
+
+  if (toShow.length > 0) {
+    await writeState(kv, next);
+  }
+  return toShow;
+}
+
+/**
+ * Unconditionally re-anchors every non-empty canonical group's stored
+ * state to its current matches, without deciding whether to show it.
+ * Used by the forced path (`/run?force=true`) so each group's 1%
+ * threshold anchors to this run's values instead of going stale. Returns
+ * the groups that were re-anchored (i.e. currently non-empty), which is
+ * also the set the caller should show alongside `Other`.
+ */
+export async function recordGroupsPublished(
+  kv: KVNamespace,
+  matchesByGroup: Record<CanonicalWatchlistGroup, WatchListMatch[]>,
+  now: Date = new Date()
+): Promise<CanonicalWatchlistGroup[]> {
+  const today = todayInTimeZone(now);
+  const previous = await readState(kv);
+  const next: StoredState = { ...previous };
+
+  const nonEmpty: CanonicalWatchlistGroup[] = [];
+  for (const group of CANONICAL_WATCHLIST_GROUPS) {
+    const matches = matchesByGroup[group];
+    if (matches.length === 0) continue;
+    nonEmpty.push(group);
+    next[group] = { date: today, pv: pvByTicker(matches) };
+  }
+
+  if (nonEmpty.length > 0) {
+    await writeState(kv, next);
+  }
+  return nonEmpty;
 }
