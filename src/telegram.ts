@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import type { WatchListMatch } from "./sheets";
+import type { WatchlistGroup } from "./config";
 import { TIME_ZONE } from "./config";
 
 interface TelegramSendMessageResponse {
@@ -7,25 +8,19 @@ interface TelegramSendMessageResponse {
   description?: string;
 }
 
+/** One group's matches, already decided by the caller to be worth rendering. */
+export interface WatchlistGroupSection {
+  group: WatchlistGroup;
+  matches: WatchListMatch[];
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Formats matches as a monospace HTML `<pre>` table for `parse_mode: "HTML"`. */
-export function formatTelegramMessage(matches: WatchListMatch[], now: Date = new Date()): string {
-  const timestamp = new Intl.DateTimeFormat("en-GB", {
-    timeZone: TIME_ZONE,
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(now);
-
-  const heading = `\u{1F4CA} <b>Watch-List Alert</b> (${timestamp})`;
-
-  if (matches.length === 0) {
-    return `${heading}\nNo stocks currently have Target &gt; PV $.`;
-  }
-
-  const sorted = [...matches].sort((a, b) => {
+/** Renders one group's matches as a `<b>` sub-heading + monospace `<pre>` table. */
+function formatGroupSection(section: WatchlistGroupSection): string {
+  const sorted = [...section.matches].sort((a, b) => {
     const upsideA = (a.target - a.pv) / a.pv;
     const upsideB = (b.target - b.pv) / b.pv;
     return upsideB - upsideA;
@@ -39,7 +34,39 @@ export function formatTelegramMessage(matches: WatchListMatch[], now: Date = new
   });
   const table = [header, separator, ...lines].join("\n");
 
-  return `${heading}\n<pre>${escapeHtml(table)}</pre>`;
+  return `<b>${escapeHtml(section.group)}</b>\n<pre>${escapeHtml(table)}</pre>`;
+}
+
+/**
+ * Formats a fixed-order list of already-decided-to-render group sections
+ * into a single monospace HTML message for `parse_mode: "HTML"` -- one
+ * overall heading/timestamp, then one sub-heading + `<pre>` table per
+ * section, stacked in the order the caller passed them in (Core ->
+ * Opportunities -> Speculative -> Other, per `GROUP_ORDER`).
+ *
+ * The "nothing to report" fallback only fires when `sections` is empty --
+ * unlike the previous single-list behavior, an empty render set today
+ * means "send nothing at all" (the caller skips calling this), but this
+ * fallback stays as a safety net for direct callers.
+ */
+export function formatTelegramMessage(
+  sections: WatchlistGroupSection[],
+  now: Date = new Date()
+): string {
+  const timestamp = new Intl.DateTimeFormat("en-GB", {
+    timeZone: TIME_ZONE,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(now);
+
+  const heading = `\u{1F4CA} <b>Watch-List Alert</b> (${timestamp})`;
+
+  if (sections.length === 0) {
+    return `${heading}\nNo stocks currently have Target &gt; PV $.`;
+  }
+
+  const body = sections.map(formatGroupSection).join("\n\n");
+  return `${heading}\n\n${body}`;
 }
 
 /** Posts a message to the configured Telegram chat via the Bot API. */

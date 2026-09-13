@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { shouldPublish, recordPublished } from "../src/state";
+import { decideGroupsToPublish, recordGroupsPublished } from "../src/state";
 import type { WatchListMatch } from "../src/sheets";
+import type { CanonicalWatchlistGroup } from "../src/config";
 
 /** Minimal in-memory stand-in for the KVNamespace binding. */
 function fakeKv(): KVNamespace {
@@ -17,86 +18,183 @@ function fakeKv(): KVNamespace {
   } as KVNamespace;
 }
 
-function match(ticker: string, pv: number): WatchListMatch {
-  return { ticker, pv, target: pv + 1 };
+function match(ticker: string, pv: number, group: CanonicalWatchlistGroup = "Core"): WatchListMatch {
+  return { ticker, pv, target: pv + 1, group };
 }
 
-describe("shouldPublish", () => {
+/** Builds the per-canonical-group matches map `decideGroupsToPublish` expects. */
+function matchesByGroup(
+  overrides: Partial<Record<CanonicalWatchlistGroup, WatchListMatch[]>> = {}
+): Record<CanonicalWatchlistGroup, WatchListMatch[]> {
+  return {
+    Core: [],
+    Opportunities: [],
+    Speculative: [],
+    ...overrides,
+  };
+}
+
+describe("decideGroupsToPublish", () => {
   const day1 = new Date("2026-09-01T17:00:00Z"); // 19:00 Europe/Prague (CEST)
   const day1Later = new Date("2026-09-01T19:00:00Z");
   const day2 = new Date("2026-09-02T17:00:00Z");
 
-  it("always publishes when there are no matches", async () => {
+  it("shows nothing when every group is empty", async () => {
     const kv = fakeKv();
-    expect(await shouldPublish(kv, [], day1)).toBe(true);
+    expect(await decideGroupsToPublish(kv, matchesByGroup(), day1)).toEqual([]);
   });
 
-  it("always publishes the first time a ticker is seen", async () => {
+  it("always shows the first time a ticker is seen in a group", async () => {
     const kv = fakeKv();
-    expect(await shouldPublish(kv, [match("AAA", 10)], day1)).toBe(true);
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10)] }),
+      day1
+    );
+    expect(result).toEqual(["Core"]);
   });
 
-  it("always publishes the first run of a new calendar day, even with no change", async () => {
+  it("always shows the first run of a new calendar day for a group, even with no change", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10)], day1);
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1);
 
-    expect(await shouldPublish(kv, [match("AAA", 10)], day2)).toBe(true);
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10)] }),
+      day2
+    );
+    expect(result).toEqual(["Core"]);
   });
 
-  it("suppresses a same-day republish when PV moved less than 1%", async () => {
+  it("suppresses a same-day republish for a group when PV moved less than 1%", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10)], day1);
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1);
 
-    expect(await shouldPublish(kv, [match("AAA", 10.05)], day1Later)).toBe(false);
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10.05)] }),
+      day1Later
+    );
+    expect(result).toEqual([]);
   });
 
-  it("publishes a same-day republish when any ticker's PV moved more than 1%", async () => {
+  it("shows a same-day republish for a group when any of its tickers' PV moved more than 1%", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10), match("BBB", 20)], day1);
+    await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10), match("BBB", 20)] }),
+      day1
+    );
 
-    expect(
-      await shouldPublish(kv, [match("AAA", 10.2), match("BBB", 20)], day1Later)
-    ).toBe(true);
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10.2), match("BBB", 20)] }),
+      day1Later
+    );
+    expect(result).toEqual(["Core"]);
   });
 
-  it("publishes a same-day republish when a new ticker appears alongside unchanged ones", async () => {
+  it("omits an empty group and does not touch its stored state", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10)], day1);
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1);
 
-    expect(await shouldPublish(kv, [match("AAA", 10), match("BBB", 20)], day1Later)).toBe(true);
+    // Core goes empty this run -- shouldn't show, and its prior anchor stays put.
+    const result = await decideGroupsToPublish(kv, matchesByGroup(), day1Later);
+    expect(result).toEqual([]);
+
+    // Confirmed by re-introducing the same PV later the same day: still suppressed,
+    // proving Core's anchor is untouched (10, not cleared).
+    const laterResult = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10.05)] }),
+      day1Later
+    );
+    expect(laterResult).toEqual([]);
   });
 
-  it("does not update stored state on a suppressed run", async () => {
+  it("does not update a group's stored state on a suppressed run", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10)], day1);
-    await shouldPublish(kv, [match("AAA", 10.05)], day1Later); // suppressed, no state update
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1);
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10.05)] }), day1Later); // suppressed
 
     // A tiny additional move on top of the still-unchanged baseline stays under 1% total,
     // so it should still be suppressed -- proving the anchor didn't drift to 10.05.
-    expect(await shouldPublish(kv, [match("AAA", 10.09)], day1Later)).toBe(false);
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10.09)] }),
+      day1Later
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("decides each canonical group independently", async () => {
+    const kv = fakeKv();
+    await decideGroupsToPublish(
+      kv,
+      matchesByGroup({
+        Core: [match("AAA", 10)],
+        Opportunities: [match("BBB", 20)],
+        Speculative: [match("CCC", 30)],
+      }),
+      day1
+    );
+
+    // Only Opportunities moves past 1% this run; Core and Speculative are unchanged.
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({
+        Core: [match("AAA", 10.05)],
+        Opportunities: [match("BBB", 20.5)],
+        Speculative: [match("CCC", 30.05)],
+      }),
+      day1Later
+    );
+
+    expect(result).toEqual(["Opportunities"]);
   });
 });
 
-describe("recordPublished", () => {
+describe("recordGroupsPublished", () => {
   const day1 = new Date("2026-09-01T17:00:00Z");
   const day1Later = new Date("2026-09-01T19:00:00Z");
 
-  it("re-anchors the stored PV so a later shouldPublish compares against the recorded value", async () => {
+  it("re-anchors a group's stored PV so a later decision compares against the recorded value", async () => {
     const kv = fakeKv();
-    await shouldPublish(kv, [match("AAA", 10)], day1);
+    await decideGroupsToPublish(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1);
 
     // Simulates a forced publish at an unchanged PV -- state should still move to 10.
-    await recordPublished(kv, [match("AAA", 10)], day1Later);
+    await recordGroupsPublished(kv, matchesByGroup({ Core: [match("AAA", 10)] }), day1Later);
 
-    // A move that's >1% from the re-anchored value publishes...
-    expect(await shouldPublish(kv, [match("AAA", 10.2)], day1Later)).toBe(true);
+    // A move that's >1% from the re-anchored value shows...
+    const result = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10.2)] }),
+      day1Later
+    );
+    expect(result).toEqual(["Core"]);
   });
 
-  it("records an empty PV map when there are no matches", async () => {
+  it("returns only the currently non-empty groups, and leaves empty groups' state untouched", async () => {
     const kv = fakeKv();
-    await recordPublished(kv, [], day1);
+    const result = await recordGroupsPublished(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10)] }),
+      day1
+    );
+    expect(result).toEqual(["Core"]);
+  });
+
+  it("returns an empty list and writes nothing when every group is empty", async () => {
+    const kv = fakeKv();
+    const result = await recordGroupsPublished(kv, matchesByGroup(), day1);
+    expect(result).toEqual([]);
 
     // A brand new ticker after an empty forced publish still counts as new.
-    expect(await shouldPublish(kv, [match("AAA", 10)], day1)).toBe(true);
+    const decide = await decideGroupsToPublish(
+      kv,
+      matchesByGroup({ Core: [match("AAA", 10)] }),
+      day1
+    );
+    expect(decide).toEqual(["Core"]);
   });
 });

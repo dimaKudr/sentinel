@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
+import type { WatchListMatch } from "../src/sheets";
 
 vi.mock("../src/google-auth", () => ({
   getGoogleAccessToken: vi.fn(),
@@ -7,10 +8,14 @@ vi.mock("../src/google-auth", () => ({
 vi.mock("../src/drive", () => ({
   findFileIdByName: vi.fn(),
 }));
-vi.mock("../src/sheets", () => ({
-  getSheetValues: vi.fn(),
-  filterRows: vi.fn(),
-}));
+vi.mock("../src/sheets", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/sheets")>();
+  return {
+    ...actual,
+    getSheetValues: vi.fn(),
+    filterRows: vi.fn(),
+  };
+});
 vi.mock("../src/telegram", () => ({
   formatTelegramMessage: vi.fn(),
   sendTelegram: vi.fn(),
@@ -19,8 +24,8 @@ vi.mock("../src/schedule", () => ({
   isWithinRunWindow: vi.fn(),
 }));
 vi.mock("../src/state", () => ({
-  shouldPublish: vi.fn(),
-  recordPublished: vi.fn(),
+  decideGroupsToPublish: vi.fn(),
+  recordGroupsPublished: vi.fn(),
 }));
 
 import worker from "../src/index";
@@ -29,7 +34,7 @@ import { findFileIdByName } from "../src/drive";
 import { getSheetValues, filterRows } from "../src/sheets";
 import { formatTelegramMessage, sendTelegram } from "../src/telegram";
 import { isWithinRunWindow } from "../src/schedule";
-import { shouldPublish, recordPublished } from "../src/state";
+import { decideGroupsToPublish, recordGroupsPublished } from "../src/state";
 
 const env: Env = {
   GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
@@ -39,13 +44,17 @@ const env: Env = {
   SENTINEL_STATE: {} as KVNamespace,
 };
 
+function match(ticker: string, group: WatchListMatch["group"]): WatchListMatch {
+  return { ticker, target: 2, pv: 1, group };
+}
+
 function stubHappyPathPipeline(): void {
   vi.mocked(getGoogleAccessToken).mockResolvedValue("token");
   vi.mocked(findFileIdByName).mockResolvedValue("file-id");
   vi.mocked(getSheetValues).mockResolvedValue([["Ticker", "Target", "PV $"]]);
   vi.mocked(filterRows).mockReturnValue([]);
-  vi.mocked(shouldPublish).mockResolvedValue(true);
-  vi.mocked(recordPublished).mockResolvedValue(undefined);
+  vi.mocked(decideGroupsToPublish).mockResolvedValue([]);
+  vi.mocked(recordGroupsPublished).mockResolvedValue([]);
   vi.mocked(formatTelegramMessage).mockReturnValue("message");
   vi.mocked(sendTelegram).mockResolvedValue(undefined);
 }
@@ -56,6 +65,14 @@ function makeExecutionContext(): ExecutionContext {
     passThroughOnException: vi.fn(),
     props: {},
   } as unknown as ExecutionContext;
+}
+
+async function runManual(query = ""): Promise<Response> {
+  const request = new Request(`https://worker.example/run${query}`, {
+    method: "GET",
+    headers: { "X-Run-Secret": "test-run-secret" },
+  });
+  return worker.fetch(request, env);
 }
 
 describe("fetch", () => {
@@ -75,25 +92,23 @@ describe("fetch", () => {
     expect(getGoogleAccessToken).not.toHaveBeenCalled();
   });
 
-  it("GET /run runs the job pipeline and returns 200 on success", async () => {
+  it("GET /run runs the job pipeline but sends nothing when no group has anything to show", async () => {
     stubHappyPathPipeline();
-    const request = new Request("https://worker.example/run", {
-      method: "GET",
-      headers: { "X-Run-Secret": "test-run-secret" },
-    });
 
-    const response = await worker.fetch(request, env);
+    const response = await runManual();
 
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain("OK - job ran, check Telegram.");
     expect(getGoogleAccessToken).toHaveBeenCalledWith(env);
     expect(findFileIdByName).toHaveBeenCalledWith("token", "Watch-List");
-    expect(sendTelegram).toHaveBeenCalledWith(env, "message");
+    expect(sendTelegram).not.toHaveBeenCalled();
   });
 
   it("POST /run runs the job pipeline and returns 200 on success", async () => {
     stubHappyPathPipeline();
+    vi.mocked(filterRows).mockReturnValue([match("AAA", "Core")]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue(["Core"]);
     const request = new Request("https://worker.example/run", {
       method: "POST",
       headers: { "X-Run-Secret": "test-run-secret" },
@@ -110,61 +125,108 @@ describe("fetch", () => {
   it("/run returns 500 with the error message when the job pipeline throws", async () => {
     stubHappyPathPipeline();
     vi.mocked(getGoogleAccessToken).mockRejectedValue(new Error("token exchange failed"));
-    const request = new Request("https://worker.example/run", {
-      method: "GET",
-      headers: { "X-Run-Secret": "test-run-secret" },
-    });
 
-    const response = await worker.fetch(request, env);
+    const response = await runManual();
 
     expect(response.status).toBe(500);
     const body = await response.text();
     expect(body).toContain("ERROR: token exchange failed");
   });
 
-  it("/run does not publish to Telegram when shouldPublish returns false", async () => {
+  it("sends only the group(s) decideGroupsToPublish marks to show", async () => {
     stubHappyPathPipeline();
-    vi.mocked(shouldPublish).mockResolvedValue(false);
-    const request = new Request("https://worker.example/run", {
-      method: "GET",
-      headers: { "X-Run-Secret": "test-run-secret" },
-    });
+    vi.mocked(filterRows).mockReturnValue([
+      match("AAA", "Core"),
+      match("BBB", "Opportunities"),
+      match("CCC", "Speculative"),
+    ]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue(["Opportunities"]);
 
-    const response = await worker.fetch(request, env);
+    const response = await runManual();
+
+    expect(response.status).toBe(200);
+    expect(formatTelegramMessage).toHaveBeenCalledWith([
+      { group: "Opportunities", matches: [match("BBB", "Opportunities")] },
+    ]);
+    expect(sendTelegram).toHaveBeenCalledWith(env, "message");
+  });
+
+  it("does not publish to Telegram when every group is empty or suppressed (all-quiet)", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(filterRows).mockReturnValue([match("AAA", "Core")]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue([]);
+
+    const response = await runManual();
 
     expect(response.status).toBe(200);
     expect(formatTelegramMessage).not.toHaveBeenCalled();
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
-  it("/run?force=true publishes even when shouldPublish would suppress it", async () => {
+  it("always shows Other when it has matches, even though no group changed", async () => {
     stubHappyPathPipeline();
-    vi.mocked(shouldPublish).mockResolvedValue(false);
-    const request = new Request("https://worker.example/run?force=true", {
-      method: "GET",
-      headers: { "X-Run-Secret": "test-run-secret" },
-    });
+    vi.mocked(filterRows).mockReturnValue([match("ZZZ", "Other")]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue([]);
 
-    const response = await worker.fetch(request, env);
+    const response = await runManual();
 
     expect(response.status).toBe(200);
-    expect(shouldPublish).not.toHaveBeenCalled();
-    expect(recordPublished).toHaveBeenCalledWith(env.SENTINEL_STATE, []);
+    expect(formatTelegramMessage).toHaveBeenCalledWith([
+      { group: "Other", matches: [match("ZZZ", "Other")] },
+    ]);
+    expect(sendTelegram).toHaveBeenCalledWith(env, "message");
+  });
+
+  it("orders sections Core -> Opportunities -> Speculative -> Other regardless of sheet order", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(filterRows).mockReturnValue([
+      match("DDD", "Other"),
+      match("CCC", "Speculative"),
+      match("BBB", "Opportunities"),
+      match("AAA", "Core"),
+    ]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue(["Core", "Opportunities", "Speculative"]);
+
+    await runManual();
+
+    expect(formatTelegramMessage).toHaveBeenCalledWith([
+      { group: "Core", matches: [match("AAA", "Core")] },
+      { group: "Opportunities", matches: [match("BBB", "Opportunities")] },
+      { group: "Speculative", matches: [match("CCC", "Speculative")] },
+      { group: "Other", matches: [match("DDD", "Other")] },
+    ]);
+  });
+
+  it("/run?force=true publishes every non-empty canonical group plus Other, bypassing suppression", async () => {
+    stubHappyPathPipeline();
+    vi.mocked(filterRows).mockReturnValue([match("AAA", "Core"), match("ZZZ", "Other")]);
+    vi.mocked(recordGroupsPublished).mockResolvedValue(["Core"]);
+
+    const response = await runManual("?force=true");
+
+    expect(response.status).toBe(200);
+    expect(decideGroupsToPublish).not.toHaveBeenCalled();
+    expect(recordGroupsPublished).toHaveBeenCalledWith(env.SENTINEL_STATE, {
+      Core: [match("AAA", "Core")],
+      Opportunities: [],
+      Speculative: [],
+    });
+    expect(formatTelegramMessage).toHaveBeenCalledWith([
+      { group: "Core", matches: [match("AAA", "Core")] },
+      { group: "Other", matches: [match("ZZZ", "Other")] },
+    ]);
     expect(sendTelegram).toHaveBeenCalledWith(env, "message");
   });
 
   it("/run without force still applies the unchanged-PV suppression", async () => {
     stubHappyPathPipeline();
-    vi.mocked(shouldPublish).mockResolvedValue(false);
-    const request = new Request("https://worker.example/run", {
-      method: "GET",
-      headers: { "X-Run-Secret": "test-run-secret" },
-    });
+    vi.mocked(filterRows).mockReturnValue([match("AAA", "Core")]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue([]);
 
-    const response = await worker.fetch(request, env);
+    const response = await runManual();
 
     expect(response.status).toBe(200);
-    expect(recordPublished).not.toHaveBeenCalled();
+    expect(recordGroupsPublished).not.toHaveBeenCalled();
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
@@ -234,6 +296,8 @@ describe("scheduled", () => {
   it("invokes the job pipeline via ctx.waitUntil when inside the run window", async () => {
     stubHappyPathPipeline();
     vi.mocked(isWithinRunWindow).mockReturnValue(true);
+    vi.mocked(filterRows).mockReturnValue([match("AAA", "Core")]);
+    vi.mocked(decideGroupsToPublish).mockResolvedValue(["Core"]);
     const ctx = makeExecutionContext();
 
     await worker.scheduled({} as ScheduledController, env, ctx);

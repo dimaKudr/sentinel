@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatTelegramMessage, sendTelegram } from "../src/telegram";
+import type { WatchlistGroupSection } from "../src/telegram";
 import type { Env } from "../src/env";
 
 describe("formatTelegramMessage", () => {
   const fixedNow = new Date("2026-08-31T18:00:00Z");
 
-  it("produces a 'no matches' message when there are zero matches", () => {
+  it("produces a 'no matches' message when there are zero sections", () => {
     const message = formatTelegramMessage([], fixedNow);
 
     expect(message).toContain("No stocks currently have Target &gt; PV $.");
@@ -13,15 +14,19 @@ describe("formatTelegramMessage", () => {
     expect(message).not.toContain("<pre>");
   });
 
-  it("formats a table with matches inside a <pre> block", () => {
-    const message = formatTelegramMessage(
-      [
-        { ticker: "AAA", target: 15, pv: 10 },
-        { ticker: "BBB", target: 12, pv: 10 },
-      ],
-      fixedNow
-    );
+  it("formats a single group's table with matches inside a <pre> block", () => {
+    const sections: WatchlistGroupSection[] = [
+      {
+        group: "Core",
+        matches: [
+          { ticker: "AAA", target: 15, pv: 10, group: "Core" },
+          { ticker: "BBB", target: 12, pv: 10, group: "Core" },
+        ],
+      },
+    ];
+    const message = formatTelegramMessage(sections, fixedNow);
 
+    expect(message).toContain("<b>Core</b>");
     expect(message).toContain("<pre>");
     expect(message).toContain("Ticker    PV $      Target    Upside%");
     expect(message).toContain("AAA");
@@ -33,23 +38,52 @@ describe("formatTelegramMessage", () => {
     expect(message).toContain("20.0%");
   });
 
-  it("sorts rows by descending upside percentage", () => {
-    const message = formatTelegramMessage(
-      [
-        { ticker: "LOW", target: 11, pv: 10 },
-        { ticker: "HIGH", target: 20, pv: 10 },
-      ],
-      fixedNow
-    );
+  it("sorts rows within a group by descending upside percentage", () => {
+    const sections: WatchlistGroupSection[] = [
+      {
+        group: "Core",
+        matches: [
+          { ticker: "LOW", target: 11, pv: 10, group: "Core" },
+          { ticker: "HIGH", target: 20, pv: 10, group: "Core" },
+        ],
+      },
+    ];
+    const message = formatTelegramMessage(sections, fixedNow);
 
     expect(message.indexOf("HIGH")).toBeLessThan(message.indexOf("LOW"));
   });
 
-  it("HTML-escapes ticker values", () => {
-    const message = formatTelegramMessage(
-      [{ ticker: "<script>&", target: 1, pv: 2 }],
-      fixedNow
+  it("stacks multiple group sections in the order they're passed", () => {
+    const sections: WatchlistGroupSection[] = [
+      { group: "Core", matches: [{ ticker: "AAA", target: 2, pv: 1, group: "Core" }] },
+      {
+        group: "Opportunities",
+        matches: [{ ticker: "BBB", target: 2, pv: 1, group: "Opportunities" }],
+      },
+      {
+        group: "Speculative",
+        matches: [{ ticker: "CCC", target: 2, pv: 1, group: "Speculative" }],
+      },
+      { group: "Other", matches: [{ ticker: "DDD", target: 2, pv: 1, group: "Other" }] },
+    ];
+    const message = formatTelegramMessage(sections, fixedNow);
+
+    expect(message).toContain("<b>Core</b>");
+    expect(message).toContain("<b>Opportunities</b>");
+    expect(message).toContain("<b>Speculative</b>");
+    expect(message).toContain("<b>Other</b>");
+    expect(message.indexOf("<b>Core</b>")).toBeLessThan(message.indexOf("<b>Opportunities</b>"));
+    expect(message.indexOf("<b>Opportunities</b>")).toBeLessThan(
+      message.indexOf("<b>Speculative</b>")
     );
+    expect(message.indexOf("<b>Speculative</b>")).toBeLessThan(message.indexOf("<b>Other</b>"));
+  });
+
+  it("HTML-escapes ticker values", () => {
+    const sections: WatchlistGroupSection[] = [
+      { group: "Core", matches: [{ ticker: "<script>&", target: 1, pv: 2, group: "Core" }] },
+    ];
+    const message = formatTelegramMessage(sections, fixedNow);
 
     expect(message).toContain("&lt;script&gt;&amp;");
     expect(message).not.toContain("<script>");

@@ -1,4 +1,5 @@
-import type { SentinelConfig } from "./config";
+import type { SentinelConfig, WatchlistGroup } from "./config";
+import { CANONICAL_WATCHLIST_GROUPS } from "./config";
 
 export type SheetRow = string[];
 
@@ -10,6 +11,7 @@ export interface WatchListMatch {
   ticker: string;
   target: number;
   pv: number;
+  group: WatchlistGroup;
 }
 
 /**
@@ -50,11 +52,30 @@ export function parseNumber(value: unknown): number {
 }
 
 /**
+ * Resolves a raw `Watchlist` cell value to one of the 3 canonical groups
+ * via a trimmed, case-insensitive match, or `"Other"` for anything else
+ * (blank, typo'd, or otherwise unrecognized). `"Other"` is a deliberate
+ * catch-all -- it surfaces likely data-entry problems in the sheet rather
+ * than silently dropping the row.
+ */
+function resolveWatchlistGroup(rawValue: string | undefined): WatchlistGroup {
+  const normalized = (rawValue ?? "").trim().toLowerCase();
+  const canonical = CANONICAL_WATCHLIST_GROUPS.find((g) => g.toLowerCase() === normalized);
+  return canonical ?? "Other";
+}
+
+/**
  * Filters sheet rows to those where Target > PV $ and WallSt > PV $,
  * resolving column positions by (case-insensitive, trimmed) header name
  * rather than fixed index. A row with an unparseable WallSt value isn't
  * excluded by that rule -- there's nothing to compare, so it falls back
  * to just the Target > PV $ check.
+ *
+ * Each match is tagged with its resolved `Watchlist` group (see
+ * `resolveWatchlistGroup`). The `Watchlist` header itself must exist in the
+ * sheet (missing header throws, same as the other configured columns) --
+ * only an individual row's *value* not matching a canonical name falls
+ * back to `"Other"` rather than throwing.
  *
  * `rows` is the raw values.get response, which is always anchored at A1.
  * The real header row lives at `config.HEADER_ROW` (1-based), so the header
@@ -67,7 +88,7 @@ export function filterRows(
   rows: SheetRow[],
   config: Pick<
     SentinelConfig,
-    "HEADER_ROW" | "TICKER_COL" | "TARGET_COL" | "PV_COL" | "WALLST_COL"
+    "HEADER_ROW" | "TICKER_COL" | "TARGET_COL" | "PV_COL" | "WALLST_COL" | "WATCHLIST_COL"
   >,
   options: { rowsStartAtHeaderRow?: boolean } = {}
 ): WatchListMatch[] {
@@ -86,8 +107,15 @@ export function filterRows(
   const targetIdx = indexOf(config.TARGET_COL);
   const pvIdx = indexOf(config.PV_COL);
   const wallStIdx = indexOf(config.WALLST_COL);
+  const watchlistIdx = indexOf(config.WATCHLIST_COL);
 
-  if (tickerIdx === -1 || targetIdx === -1 || pvIdx === -1 || wallStIdx === -1) {
+  if (
+    tickerIdx === -1 ||
+    targetIdx === -1 ||
+    pvIdx === -1 ||
+    wallStIdx === -1 ||
+    watchlistIdx === -1
+  ) {
     throw new Error(
       `Configured column(s) not found. Sheet headers were: [${headerRow.join(", ")}]`
     );
@@ -105,7 +133,32 @@ export function filterRows(
     const wallSt = parseNumber(row[wallStIdx]);
     if (!Number.isNaN(wallSt) && wallSt <= pv) continue;
 
-    results.push({ ticker: row[tickerIdx] ?? "", target, pv });
+    results.push({
+      ticker: row[tickerIdx] ?? "",
+      target,
+      pv,
+      group: resolveWatchlistGroup(row[watchlistIdx]),
+    });
   }
   return results;
+}
+
+/**
+ * Buckets matches by their resolved `Watchlist` group, preserving
+ * `GROUP_ORDER` (Core -> Opportunities -> Speculative -> Other) as the key
+ * order so downstream iteration doesn't need to re-sort.
+ */
+export function groupMatchesByWatchlist(
+  matches: WatchListMatch[]
+): Record<WatchlistGroup, WatchListMatch[]> {
+  const grouped: Record<WatchlistGroup, WatchListMatch[]> = {
+    Core: [],
+    Opportunities: [],
+    Speculative: [],
+    Other: [],
+  };
+  for (const match of matches) {
+    grouped[match.group].push(match);
+  }
+  return grouped;
 }
