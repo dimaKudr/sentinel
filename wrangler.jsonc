@@ -4,12 +4,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
 
-  // Keep the public <name>.<subdomain>.workers.dev URL enabled, and enable
-  // Preview URLs (per-version workers.dev URLs) that follow from it. Set
-  // explicitly so the deployed config always matches this file instead of
-  // drifting from Cloudflare's dashboard defaults.
-  "workers_dev": true,
-  "preview_urls": true,
+  // DISABLED: workers.dev URL and Preview URLs are turned off so the Worker
+  // can't be invoked over HTTP. To re-enable, set both back to true.
+  "workers_dev": false,
+  "preview_urls": false,
 
   "observability": {
     "enabled": true,
@@ -18,12 +16,12 @@
     }
   },
 
-  // Fires every hour, every day. The Worker itself decides (in Europe/Prague
-  // local time) whether it's actually within the Mon-Fri run window before
-  // doing any work -- this keeps the schedule correct across DST
-  // changeovers without ever needing to edit this file twice a year.
+  // DISABLED: cron removed so the Worker never runs on a schedule.
+  // To re-enable, restore: "crons": ["0 * * * *"]
+  // (Fires hourly; the Worker itself decides, in Europe/Prague local time,
+  // whether it's within the Mon-Fri run window -- DST-safe.)
   "triggers": {
-    "crons": ["0 * * * *"]
+    "crons": []
   },
 
   // Stores the last-published PV per ticker so we can suppress noisy
